@@ -1,0 +1,25 @@
+[package]
+name = "live2d-ai-mod-local-tts"
+description = "本地 TTS 拉起 Mod（2026-10-09）：按用户 argv spawn 外部进程；缺省停用、不写 [tts] 的任何键、不改出声地址"
+version = "0.3.1"
+edition = "2024"
+rust-version = "1.92"
+license = "AGPL-3.0-only"
+authors = ["Sakura Motion Project"]
+
+[dependencies]
+live2d-ai-mod-system = { path = "../Live2D-Ai/crates/live2d-ai-mod-system" }
+serde_json = "1"
+
+# 仅 Linux：给 spawn 出的长驻子进程装 PR_SET_PDEATHSIG，让它的生命周期与主程序
+# 一致（父进程被 SIGKILL 时内核兜底收掉子进程，避免 melo 变成占端口的孤儿）。
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[workspace]

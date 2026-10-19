@@ -1,0 +1,13 @@
+# Rust
+/target/
+__pycache__/
+*.pyc
+
+# local-tts：Python / 权重产物（全部本机生成，不入库）
+melo/.venv/
+melo/.cache/
+melo/.src/
+melo/weights/*.pth
+engine/.venv/
+engine/weights/
+weights/
