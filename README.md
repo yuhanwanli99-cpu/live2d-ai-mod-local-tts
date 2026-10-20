@@ -33,4 +33,4 @@ cargo fmt -- --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-远端未建、未 push；本地 `main` 分支一次提交。
+公开仓库：<https://github.com/yuhanwanli99-cpu/live2d-ai-mod-local-tts>（分支 `main`）。权重与虚拟环境不在这个仓库里。
