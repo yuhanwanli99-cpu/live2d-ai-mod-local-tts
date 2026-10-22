@@ -250,11 +250,63 @@ impl LaunchConfig {
     }
 }
 
+/// Windows 可执行入口判据（**纯函数**；Linux 上也编译，由单测直接喂输入）。
+///
+/// # 为什么需要（0.4.0 Windows，2026-10-22）
+///
+/// 本 crate 的两个内置入口是**仓库内的 bash 脚本**（`melo/start.sh`、
+/// `engine/start.sh`）。`std::process::Command` 在 Windows 上直接走
+/// `CreateProcessW`：脚本不是可执行映像，失败只会给一句
+/// 「不是有效的 Win32 应用程序」——用户看不出该填什么；更糟的是
+/// **我们确实把 bash 脚本交给了 CreateProcess**。0.4.0 的口径是：没有
+/// Windows 入口就**在 spawn 之前**把原因说清楚，禁止把脚本交出去。
+///
+/// 判据（只认 `.exe`，大小写不敏感）：空 / `.sh` 系 / `.bat` / `.cmd` /
+/// 其他非 `.exe` 一律给出可读原因（`Some`）；`.exe` → `None`。
+///
+/// **只在 Windows 目标上生效**：[preflight_engine] 与
+/// `LocalTtsRuntime::spawn_child` 里以 `cfg(windows)` 调用；Linux 行为零改动。
+/// 非 Windows 的非测试构建里没有调用点，故只在 `windows` / `test` 下编译
+/// （判据本身由 Linux 单测锁定，避免「判据改了没人测」）。
+#[cfg(any(windows, test))]
+pub fn windows_entry_blocker(program: &Path) -> Option<String> {
+    let raw = program.to_string_lossy();
+    if raw.trim().is_empty() {
+        return Some(
+            "Windows 目标没有配置引擎入口：仓库内的 melo/start.sh 与 engine/start.sh 是 \
+             bash 脚本，Windows 上不能直接执行。请把 program 配成一个 Windows 可执行文件（.exe）。"
+                .to_string(),
+        );
+    }
+    let ext = program
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "exe" {
+        return None;
+    }
+    if matches!(ext.as_str(), "sh" | "bash" | "zsh" | "bat" | "cmd" | "ps1") {
+        return Some(format!(
+            "Windows 目标不能把脚本当入口：{raw}（.{ext} 需要解释器；本 Mod 按 argv 逐个参数直接 \
+             CreateProcess，不经 shell，也不替用户挑解释器）。CosyVoice 已封存不恢复，MeloTTS \
+             也没有随包的 Windows 入口——请把 program 配成 Windows 可执行文件（.exe）。"
+        ));
+    }
+    Some(format!(
+        "Windows 入口必须是 .exe 文件本身：{raw}（扩展名是 {ext:?}）。请配 Windows 可执行文件。"
+    ))
+}
+
 /// 预检本体（**纯函数 + 真实路径**，所以单测能直接喂临时目录，不必依赖
 /// 仓库里到底有没有下载权重）。
 ///
 /// 三条判据按「用户下一步该做什么」排序：脚本 → 权重 → 解释器。
 /// 都只读文件系统，**不执行任何东西**。
+///
+/// Windows 目标多一条前置判据：入口必须是 `.exe`（见
+/// [windows_entry_blocker]），且解释器判据不适用（.venv/bin/python 是
+/// Linux 布局）。
 pub fn preflight_engine(
     program: &Path,
     weights_dir: &Path,
@@ -263,6 +315,16 @@ pub fn preflight_engine(
     interpreter_rel: &str,
     hint: &str,
 ) -> Result<(), String> {
+    // 0.4.0 Windows：**先**判断这是不是一个 Windows 能执行的入口。放在
+    // is_file 之前，是因为「.sh 不存在」与「.sh 不能执行」是两件事：Windows
+    // 用户要解决的是后者（脚本永远不在 Windows 可执行集合里）。
+    #[cfg(windows)]
+    if let Some(reason) = windows_entry_blocker(program) {
+        return Err(format!("{reason}（{hint}）"));
+    }
+    // Windows 上不查 Linux 布局的 venv 解释器（见函数头注）。
+    #[cfg(windows)]
+    let _ = interpreter_rel;
     if !program.is_file() {
         return Err(format!("启动脚本不存在：{}。{hint}", program.display()));
     }
@@ -284,11 +346,14 @@ pub fn preflight_engine(
             weights_dir.display()
         ));
     }
-    let engine_dir = program.parent().unwrap_or_else(|| Path::new("."));
-    if find_interpreter(&engine_dir.join(interpreter_rel)).is_none() {
-        return Err(format!(
-            "找不到 Python 解释器（{interpreter_rel} 或 PATH 上的 python3/python）：{hint}"
-        ));
+    #[cfg(not(windows))]
+    {
+        let engine_dir = program.parent().unwrap_or_else(|| Path::new("."));
+        if find_interpreter(&engine_dir.join(interpreter_rel)).is_none() {
+            return Err(format!(
+                "找不到 Python 解释器（{interpreter_rel} 或 PATH 上的 python3/python）：{hint}"
+            ));
+        }
     }
     Ok(())
 }
@@ -310,6 +375,9 @@ fn has_file_with_suffix(dir: &Path, suffix: &str) -> bool {
 ///
 /// 顺序是刻意的：venv 里那份才是**装了 MeloTTS / CosyVoice 依赖**的那一份；
 /// 系统 Python 只在「venv 还没建」（MeloTTS 首次启用的引导路径）时兜底。
+/// Windows 目标没有 venv/bin/python 这套布局，不调用（见
+/// [preflight_engine]），故不编译。
+#[cfg(not(windows))]
 fn find_interpreter(venv_python: &Path) -> Option<PathBuf> {
     if venv_python.is_file() {
         return Some(venv_python.to_path_buf());

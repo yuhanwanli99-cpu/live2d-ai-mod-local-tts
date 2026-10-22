@@ -67,6 +67,19 @@
 //! cli_entry::default_mods_manifest **收录 `local-tts-melo`**（`enabled: true`，
 //! `launch_mode = with_app`）：MeloTTS 中文权重由 `melo/download.sh` 下载、**不入库**，
 //! 首次启用前先跑一次下载脚本。**不收录 CosyVoice3**（已封存）。
+//!
+//! # Windows 目标（0.4.0，2026-10-22）
+//!
+//! 仓库内的两个入口都是 **bash 脚本**（`melo/start.sh`、`engine/start.sh`）。
+//! Windows 上**不执行、也绝不把脚本交给 `CreateProcess`**：
+//!
+//! - 内置引擎的预检先判入口（[`config::windows_entry_blocker`]）：.sh / .bat /
+//!   .cmd 等一律在 spawn 前返回**可读**的 Err，用户据此知道该填 .exe；
+//!   Windows 上也没有 `.venv/bin/python` 这套解释器布局，不再做那条预检；
+//! - 用户自带 `program`（engine=None，预检原本直接放行）同样在 `spawn_child`
+//!   里被同一条判据挡住——**没有 Windows 入口 ≠ 把脚本交给系统去猜**。
+//!
+//! CosyVoice3 仍封存（这条不因 Windows 恢复）；权重仍不入库；协议与命令一条未改。
 
 mod child;
 mod config;
@@ -189,6 +202,19 @@ impl LocalTtsRuntime {
         }
         let argv = self.config.argv().map_err(ModError::Other)?;
         self.config.preflight().map_err(ModError::Other)?;
+        // 0.4.0 Windows：内置引擎在 preflight 里已被挡；这里再挡一次
+        // **用户自带 program** 的路径（engine=None 时 preflight 直接 Ok，
+        // 见 LaunchConfig::engine 的头注）。绝不能把 .sh/.bat 交给
+        // CreateProcess——不 exec、不猜解释器，只报可读原因。
+        #[cfg(windows)]
+        if let Some(first) = argv.first()
+            && let Some(reason) = crate::config::windows_entry_blocker(std::path::Path::new(first))
+        {
+            return Err(ModError::Other(format!(
+                "拉起 {} 失败：{reason}",
+                self.descriptor.id
+            )));
+        }
         let request = SpawnRequest {
             argv,
             workdir: self.config.workdir_path(),

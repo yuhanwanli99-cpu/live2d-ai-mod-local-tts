@@ -401,3 +401,41 @@ fn spawn_is_refused_before_exec_when_the_engine_is_not_prepared() {
     assert_eq!(log.calls(), 0, "预检失败不得调用 spawner");
     assert_eq!(applied.load(Ordering::SeqCst), 0, "仍然不写 [tts]");
 }
+
+/// 0.4.0 Windows 入口判据（**纯函数**，Linux 上直接测；Windows 上由
+/// `cfg(windows)` 的两处调用点生效）。
+///
+/// 口径：Windows 目标**没有**随包的 Windows 入口（melo/start.sh 与
+/// engine/start.sh 都是 bash），失败原因必须可读、且入口必须是 .exe 本身——
+/// 不许把脚本交给 CreateProcess。CosyVoice 不因这条恢复。
+#[test]
+fn windows_entry_blocker_refuses_scripts_and_accepts_exe() {
+    use crate::config::windows_entry_blocker;
+    use std::path::Path;
+
+    for script in [
+        "melo/start.sh",
+        "engine/start.sh",
+        "run.bat",
+        "run.cmd",
+        "run.ps1",
+        "engine/python",
+    ] {
+        let reason = windows_entry_blocker(Path::new(script))
+            .unwrap_or_else(|| panic!("{script} 必须被 Windows 入口判据拒绝"));
+        assert!(
+            reason.contains("Windows") && reason.contains(".exe"),
+            "错误要可读且指向 .exe：{reason}"
+        );
+    }
+    let empty = windows_entry_blocker(Path::new("")).expect("空入口必须拒绝");
+    assert!(empty.contains(".exe"), "空入口的提示也要指向 .exe：{empty}");
+    assert!(
+        windows_entry_blocker(Path::new(r"C:\tools\melo\python.exe")).is_none(),
+        "Windows 入口 = .exe 文件本身"
+    );
+    assert!(
+        windows_entry_blocker(Path::new(r"C:\tools\melo\PYTHON.EXE")).is_none(),
+        "扩展名大小写不敏感"
+    );
+}
