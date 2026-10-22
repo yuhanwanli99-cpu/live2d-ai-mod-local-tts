@@ -13,6 +13,19 @@
 //! 3. **spawn 前预检**（[LaunchConfig::preflight]）：脚本不在、权重不在、
 //!    解释器不在 → 返回 Err，宿主把 Mod 标 Failed。**不重试、不改地址、
 //!    不回落云端、不把失败写成成功。**
+//!
+//! # 2026-10-22（0.4.2）Windows 常量不再烤编译机路径
+//!
+//! 缺陷：打包脚本把本 crate 解到 `/tmp/live2d-ai-pack.<随机>/` 再编译，
+//! `concat!(env!("CARGO_MANIFEST_DIR"), …)` 于是把**编译机的临时目录**写进了
+//! exe；临时目录删掉后，Windows 上每次启动都报 Failed（0.4.1 打出来的包）。
+//!
+//! 现在四个常量按目标分两份：
+//!
+//! - `cfg(not(windows))`：仓库内路径（Linux 行为一字未改）；
+//! - `cfg(windows)`：四个都是**空串**。空 program 由 [windows_entry_blocker]
+//!   给出「请把 program 配成 Windows 可执行文件（.exe）」，文案里**不带**任何
+//!   绝对路径；空 program 时预检先返回，不会去查 weights。
 
 use std::path::{Path, PathBuf};
 
@@ -30,14 +43,45 @@ pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080/v1";
 pub const MELO_BASE_URL: &str = "http://127.0.0.1:8091/v1";
 
 /// CosyVoice3 引擎的缺省程序：**本仓库内**的薄启动脚本（编译期绝对路径）。
+///
+/// **Windows 目标没有这一份**（0.4.2）：仓库里是 bash 脚本，Windows 上不可执行；
+/// 常量是**空串**，绝不再把编译机的 `CARGO_MANIFEST_DIR` 写进 exe——打包解到
+/// `/tmp/live2d-ai-pack.<随机>/`，临时目录一删就再也起不来。空串 = 「未配置」，
+/// 由 [windows_entry_blocker] 给出「请把 program 配成 Windows 可执行文件（.exe）」。
+#[cfg(not(windows))]
 pub const COSYVOICE_PROGRAM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/engine/start.sh");
+/// 见 [COSYVOICE_PROGRAM]（Windows 侧：空串，不烤编译机路径）。
+#[cfg(windows)]
+pub const COSYVOICE_PROGRAM: &str = "";
+
 /// CosyVoice3 权重目录（**进 .gitignore**，由 engine/download.sh 下载）。
+///
+/// Windows 侧同 [COSYVOICE_PROGRAM]：空串。空 program 时预检先返回，不查这块；
+/// 用户以后填了 `.exe`，也不该在提示里看到打包机的 `/tmp` 路径。
+#[cfg(not(windows))]
 pub const COSYVOICE_WEIGHTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/weights");
+/// 见 [COSYVOICE_WEIGHTS_DIR]（Windows 侧：空串）。
+#[cfg(windows)]
+pub const COSYVOICE_WEIGHTS_DIR: &str = "";
 
 /// MeloTTS 引擎的缺省程序：**本仓库内**的薄启动脚本。
+///
+/// Windows 侧：空串（理由同 [COSYVOICE_PROGRAM]；0.4.2 修复的正是这个常量——
+/// 0.4.1 的包里它曾是 `/tmp/live2d-ai-pack.<随机>/live2d-ai-mod-local-tts/melo/start.sh`）。
+#[cfg(not(windows))]
 pub const MELO_PROGRAM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/melo/start.sh");
+/// 见 [MELO_PROGRAM]（Windows 侧：空串，不烤编译机路径）。
+#[cfg(windows)]
+pub const MELO_PROGRAM: &str = "";
+
 /// MeloTTS 权重目录（权重不入库，由 melo/download.sh 下载）。
+///
+/// Windows 侧：空串（见 [COSYVOICE_WEIGHTS_DIR]）。
+#[cfg(not(windows))]
 pub const MELO_WEIGHTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/melo/weights");
+/// 见 [MELO_WEIGHTS_DIR]（Windows 侧：空串）。
+#[cfg(windows)]
+pub const MELO_WEIGHTS_DIR: &str = "";
 
 /// 一个「仓库内引擎」的静态配方：程序、权重、解释器、声明地址。
 ///
@@ -45,9 +89,9 @@ pub const MELO_WEIGHTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/melo/we
 /// 不存在的路径（不需要真的 spawn、也不需要真的下权重）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EngineSpec {
-    /// 缺省 argv[0]（仓库内脚本，编译期绝对路径）。
+    /// 缺省 argv[0]（仓库内脚本，编译期绝对路径；**Windows 目标 = 空串**，0.4.2）。
     pub program: &'static str,
-    /// 权重目录（仓库内）。
+    /// 权重目录（仓库内；**Windows 目标 = 空串**，0.4.2）。
     pub weights_dir: &'static str,
     /// 权重目录里**必须存在**的文件名。
     pub required_files: &'static [&'static str],

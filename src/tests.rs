@@ -148,23 +148,36 @@ fn workdir_only_set_when_non_empty() {
 
 /// 空 / 缺 program **不再**是「没有可执行文件」：回落到仓库内的引擎脚本，
 /// 且两条路径都在本仓库内（**禁止**回落仓库外的 3-start.sh）。
+///
+/// **0.4.2 起只在非 Windows 目标成立**：Windows 目标没有随包入口，缺省 program
+/// 是空串（见 config.rs 的 cfg(windows) 常量——不能再把编译机的
+/// CARGO_MANIFEST_DIR 烤进 exe）。空串由 windows_entry_blocker 说清该填 .exe。
 #[test]
 fn missing_program_resolves_to_the_repo_engine_script() {
     let cfg = LaunchConfig::from_json(&serde_json::json!({})).unwrap();
-    assert_eq!(cfg.program, COSYVOICE_PROGRAM);
-    assert!(
-        cfg.program.starts_with(env!("CARGO_MANIFEST_DIR")),
-        "缺省程序必须落在本 crate 目录内：{}",
-        cfg.program
-    );
-    assert!(
-        !cfg.program.contains("CosyVoice 3.0"),
-        "禁止回落到仓库外的 3-start.sh：{}",
-        cfg.program
-    );
-    assert_eq!(cfg.argv().unwrap()[0], COSYVOICE_PROGRAM);
     assert_eq!(cfg.base_url, DEFAULT_BASE_URL);
     assert_eq!(cfg.mode, LaunchMode::WithApp, "缺省拉起方式已是 with_app");
+
+    #[cfg(not(windows))]
+    {
+        assert_eq!(cfg.program, COSYVOICE_PROGRAM);
+        assert!(
+            cfg.program.starts_with(env!("CARGO_MANIFEST_DIR")),
+            "缺省程序必须落在本 crate 目录内：{}",
+            cfg.program
+        );
+        assert!(
+            !cfg.program.contains("CosyVoice 3.0"),
+            "禁止回落到仓库外的 3-start.sh：{}",
+            cfg.program
+        );
+        assert_eq!(cfg.argv().unwrap()[0], COSYVOICE_PROGRAM);
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(cfg.program, "", "Windows 目标缺省入口是空串（0.4.2）");
+        assert!(cfg.argv().is_err(), "空 program 不能组装 argv");
+    }
 
     // 显式给的 program 一字不改（用户自带程序，不做预检）。
     let cfg2 = LaunchConfig::from_json(&serde_json::json!({ "program": "/opt/x/py" })).unwrap();
@@ -173,13 +186,25 @@ fn missing_program_resolves_to_the_repo_engine_script() {
 }
 
 /// MeloTTS 的缺省程序 / 地址与 CosyVoice3 **不同**。
+///
+/// 程序那条**只在非 Windows 目标成立**（0.4.2：Windows 侧四个常量都是空串，
+/// 见 config.rs）；地址是两边都成立的跨平台契约。
 #[test]
 fn melo_engine_defaults_are_distinct() {
     let cfg = LaunchConfig::from_json_with_engine(&serde_json::json!({}), MELO_ENGINE).unwrap();
-    assert_eq!(cfg.program, MELO_PROGRAM);
     assert_eq!(cfg.base_url, MELO_BASE_URL);
     assert_ne!(cfg.base_url, DEFAULT_BASE_URL, "不得占用 8080");
-    assert!(cfg.program.contains("/melo/"), "{}", cfg.program);
+
+    #[cfg(not(windows))]
+    {
+        assert_eq!(cfg.program, MELO_PROGRAM);
+        assert!(cfg.program.contains("/melo/"), "{}", cfg.program);
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(cfg.program, "", "Windows 目标缺省入口是空串（0.4.2）");
+        assert_eq!(MELO_PROGRAM, "", "MELO_PROGRAM 不得再烤编译机路径");
+    }
 }
 
 // ─────────────────────────────────────────────────────────── 引擎预检（纯函数）
@@ -293,6 +318,10 @@ fn preflight_accepts_a_prepared_engine() {
 }
 
 /// 仓库里那两份引擎脚本必须**真的在**（缺省 program 不能指向不存在的文件）。
+///
+/// **Windows 目标不适用**（0.4.2）：那里的缺省 program 是空串，没有仓库内脚本，
+/// 由 windows_entry_blocker 在 spawn 前给出「请配 .exe」。
+#[cfg(not(windows))]
 #[test]
 fn repo_engine_scripts_exist() {
     assert!(
@@ -303,6 +332,27 @@ fn repo_engine_scripts_exist() {
         std::path::Path::new(MELO_PROGRAM).is_file(),
         "MeloTTS 启动脚本必须在仓库内：{MELO_PROGRAM}"
     );
+}
+
+/// 0.4.2 Windows：四个对象常量都**不再**烤编译机路径。
+///
+/// 缺陷现场：打包把 crate 解到 `/tmp/live2d-ai-pack.<随机>/` 再编译，
+/// `CARGO_MANIFEST_DIR` 被 `concat!` 写进 exe；临时目录删掉即 Failed。
+/// 这里钉住 Windows 侧的值就是空串（空 program 由入口判据接管）。
+#[cfg(windows)]
+#[test]
+fn windows_constants_do_not_bake_build_paths() {
+    for (name, raw) in [
+        ("COSYVOICE_PROGRAM", COSYVOICE_PROGRAM),
+        ("COSYVOICE_WEIGHTS_DIR", COSYVOICE_WEIGHTS_DIR),
+        ("MELO_PROGRAM", MELO_PROGRAM),
+        ("MELO_WEIGHTS_DIR", MELO_WEIGHTS_DIR),
+    ] {
+        assert_eq!(
+            raw, "",
+            "{name} 在 Windows 目标上必须是空串（不烤编译机路径）"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────── 坏配置
@@ -438,4 +488,35 @@ fn windows_entry_blocker_refuses_scripts_and_accepts_exe() {
         windows_entry_blocker(Path::new(r"C:\tools\melo\PYTHON.EXE")).is_none(),
         "扩展名大小写不敏感"
     );
+}
+
+/// 0.4.2 缺陷 1：Windows 空入口的提示**不得**泄露编译机路径。
+///
+/// 现象（0.4.1 的包）：启用 `local-tts-melo` 时报的入口是
+/// `/tmp/live2d-ai-pack.n3bheqy_/live2d-ai-mod-local-tts/melo/start.sh`——
+/// 打包机临时目录被 `concat!(env!("CARGO_MANIFEST_DIR"), …)` 烤进了 exe，
+/// 目录一删就每次 Failed。0.4.2 起 Windows 侧四个常量都是空串，用户看到的是
+/// 「请把 program 配成 Windows 可执行文件（.exe）」。
+///
+/// 这条判据是**纯函数**，Linux 上也能跑（Windows 侧的值由 cfg 分开，
+/// 不在本测试覆盖范围；这里锁的是**文案**不许带路径）。
+#[test]
+fn windows_entry_blocker_empty_message_carries_no_build_paths() {
+    use crate::config::windows_entry_blocker;
+    use std::path::Path;
+
+    let reason = windows_entry_blocker(Path::new("")).expect("空入口必须拒绝");
+    // 0.4.0 那句原文还在（用户据此知道下一步做什么）。
+    assert!(
+        reason.contains("Windows 目标没有配置引擎入口"),
+        "原句必须保留：{reason}"
+    );
+    assert!(reason.contains(".exe"), "提示要指向 .exe：{reason}");
+
+    for needle in ["live2d-ai-pack", "/tmp", env!("CARGO_MANIFEST_DIR")] {
+        assert!(
+            !reason.contains(needle),
+            "空入口文案不得含 {needle:?}（缺陷 1 的现场）：{reason}"
+        );
+    }
 }

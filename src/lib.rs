@@ -200,6 +200,19 @@ impl LocalTtsRuntime {
                 self.descriptor.id
             )));
         }
+        // 0.4.2 Windows：缺省 program 是空串（见 config.rs 的 cfg(windows) 常量）。
+        // 这一判据必须**先于** argv()：argv() 对空 program 报的是「program 为空：
+        // 没有可执行文件（argv[0]），无法拉起」——用户看到「没配」，而不是
+        // 「该配成 .exe」这条可执行提示。Linux 目标没有这段，行为一字未改。
+        #[cfg(windows)]
+        if self.config.program.trim().is_empty()
+            && let Some(reason) = crate::config::windows_entry_blocker(std::path::Path::new(""))
+        {
+            return Err(ModError::Other(format!(
+                "拉起 {} 失败：{reason}",
+                self.descriptor.id
+            )));
+        }
         let argv = self.config.argv().map_err(ModError::Other)?;
         self.config.preflight().map_err(ModError::Other)?;
         // 0.4.0 Windows：内置引擎在 preflight 里已被挡；这里再挡一次
